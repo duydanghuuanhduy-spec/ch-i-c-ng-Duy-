@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Haunted Manors - 3D First Person</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
+        body { background-color: #000; color: #fff; font-family: 'Courier New', Courier, monospace; overflow: hidden; width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; }
+        #canvas-container { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 1; }
+        #ui-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 2; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 20px; }
+        .hud-panel { background: rgba(15, 15, 20, 0.85); border: 1px solid #771111; padding: 10px 18px; border-radius: 6px; font-size: 15px; color: #eee; text-shadow: 1px 1px 2px #000; pointer-events: auto; }
+        #lobby-menu { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(5, 5, 10, 0.98); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 10; pointer-events: auto; }
+        h1 { color: #b22222; font-size: 42px; text-transform: uppercase; letter-spacing: 6px; margin-bottom: 10px; text-shadow: 0 0 20px #ff0000; text-align: center; }
+        p.subtitle { color: #888; margin-bottom: 30px; font-size: 14px; letter-spacing: 1px; text-align: center; }
+        .btn { background: #1a1010; color: #ddd; border: 1px solid #771111; padding: 14px 28px; margin: 8px; font-family: inherit; font-size: 16px; cursor: pointer; transition: all 0.2s; min-width: 250px; border-radius: 4px; }
+        .btn:hover { background: #b22222; color: #fff; border-color: #ff0000; box-shadow: 0 0 20px #ff0000; }
+        input[type="text"] { background: #111; border: 1px solid #771111; color: #00ffcc; padding: 12px; font-family: inherit; font-size: 18px; text-align: center; margin-bottom: 12px; width: 250px; border-radius: 4px; text-transform: uppercase; letter-spacing: 3px; }
+        #room-code-display { font-size: 26px; color: #00ffcc; letter-spacing: 4px; font-weight: bold; margin: 10px 0; text-shadow: 0 0 10px #00ffcc; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+</head>
+<body>
+
+<div id="canvas-container"></div>
+
+<div id="ui-overlay">
+    <div style="display: flex; justify-content: space-between;">
+        <div class="hud-panel">VẬT PHẨM: <span id="items-count" style="color: #ffd700; font-weight: bold;">0/4</span></div>
+        <div style="display: flex; gap: 10px;">
+            <div class="hud-panel" id="status-hiding" style="color: #ff5555; display:none;">ĐANG NÚP TRONG TỦ</div>
+            <div class="hud-panel">TẦNG: <span id="floor-display" style="color: #00ffff; font-weight: bold;">1</span></div>
+            <button class="hud-panel" style="cursor:pointer; background:#661111;" onclick="quitToMenu()">THOÁT GAME</button>
+        </div>
+    </div>
+    <div class="hud-panel" style="align-self: center; background: rgba(0,0,0,0.95); text-align: center; border-color: #771111;">
+        [W A S D] Di chuyển | [Chuột] Xoay nhìn | [Shift] Chạy | [F] Đèn pin | [E] Nhặt đồ / Lên xe | [Q] Núp tủ trốn Ma!
+    </div>
+</div>
+
+<div id="lobby-menu">
+    <h1>CĂN NHÀ HOANG - GÓC NHÌN THỨ NHẤT</h1>
+    <p class="subtitle">ĐỒ HỌA SÁNG RÕ - SINH TỒN KHÔNG LO VĂNG SẢNH</p>
+    
+    <div id="menu-initial">
+        <button class="btn" onclick="startSinglePlayer()">CHƠI ĐƠN (SOLO)</button><br>
+        <button class="btn" onclick="hostGame()">TẠO PHÒNG CO-OP</button><br>
+        <button class="btn" onclick="showJoinInput()">THAM GIA PHÒNG</button>
+    </div>
+
+    <div id="menu-join" style="display: none;">
+        <input type="text" id="join-code-input" placeholder="NHẬP MÃ PHÒNG" maxlength="6">
+        <br>
+        <button class="btn" onclick="joinGame()">KẾT NỐI NGAY</button>
+        <button class="btn" style="border-color: #444;" onclick="resetMenu()">QUAY LẠI</button>
+    </div>
+
+    <div id="menu-waiting" style="display: none; text-align: center;">
+        <p>MÃ PHÒNG CỦA BẠN:</p>
+        <div id="room-code-display">----</div>
+        <p style="color: #aaa; font-size: 13px;">Đang đợi bạn bè kết nối...</p>
+    </div>
+</div>
+
+<script>
+    const container = document.getElementById('canvas-container');
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050508);
+    scene.fog = new THREE.FogExp2(0x050508, 0.035);
+
+    const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    container.appendChild(renderer.domElement);
+
+    // Ánh sáng môi trường dịu nhẹ, rõ ràng không quá tối
+    const ambientLight = new THREE.AmbientLight(0x222233, 0.7);
+    scene.add(ambientLight);
+
+    // Xây dựng căn nhà hoang
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x332e2a, roughness: 0.8 });
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x1c1715, roughness: 0.7 });
+
+    const floor1 = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), floorMat);
+    floor1.rotation.x = -Math.PI / 2;
+    scene.add(floor1);
+
+    const floor2 = new THREE.Mesh(new THREE.PlaneGeometry(30, 30), floorMat);
+    floor2.rotation.x = -Math.PI / 2;
+    floor2.position.y = 5;
+    scene.add(floor2);
+
+    const stairs = new THREE.Mesh(new THREE.BoxGeometry(3, 5, 5), new THREE.MeshStandardMaterial({ color: 0x4a3325 }));
+    stairs.position.set(10, 2.5, 0);
+    scene.add(stairs);
+
+    // Xe ô tô tẩu thoát
+    const carGroup = new THREE.Group();
+    const carBody = new THREE.Mesh(new THREE.BoxGeometry(3, 1.5, 5), new THREE.MeshStandardMaterial({ color: 0x8b0000 }));
+    carBody.position.y = 0.75;
+    carGroup.add(carBody);
+    carGroup.position.set(-10, 0, -10);
+    scene.add(carGroup);
+
+    // Tủ đồ để núp
+    const wardrobeMat = new THREE.MeshStandardMaterial({ color: 0x3d2817 });
+    const wardrobes = [
+        { x: -10, z: 0, floor: 1 },
+        { x: 10, z: -10, floor: 2 }
+    ];
+    wardrobes.forEach(w => {
+        const box = new THREE.Mesh(new THREE.BoxGeometry(1.6, 4, 1.6), wardrobeMat);
+        box.position.set(w.x, w.floor === 1 ? 2 : 7, w.z);
+        scene.add(box);
+    });
+
+    // Con ma đi tuần
+    const ghost = new THREE.Mesh(
+        new THREE.ConeGeometry(0.9, 3.5, 8),
+        new THREE.MeshStandardMaterial({ color: 0xff2222, emissive: 0x660000, transparent: true, opacity: 0.85 })
+    );
+    ghost.position.set(0, 1.75, -5);
+    scene.add(ghost);
+
+    let peer = null;
+    let conn = null;
+    let isHost = false;
+    let myRole = 'p1';
+    let isMultiplayer = false;
+    let audioCtx = null;
+
+    let gameState = {
+        players: {
+            p1: { x: 0, z: 10, floor: 1, light: true, rot: 0, hiding: false },
+            p2: { x: 2, z: 10, floor: 1, light: true, rot: 0, hiding: false }
+        },
+        items: [
+            { id: 1, name: 'Chìa khóa', x: -10, z: 8, floor: 1, taken: false },
+            { id: 2, name: 'Bugi', x: 8, z: -8, floor: 2, taken: false },
+            { id: 3, name: 'Ắc-quy', x: -8, z: -8, floor: 2, taken: false },
+            { id: 4, name: 'Xăng', x: 0, z: -12, floor: 1, taken: false }
+        ],
+        ghostPos: { x: 0, z: -5, floor: 1 },
+        escaped: false
+    };
+
+    const itemMeshes = [];
+    gameState.items.forEach(item => {
+        const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), new THREE.MeshStandardMaterial({ color: 0xffd700, emissive: 0x665500 }));
+        mesh.position.set(item.x, item.floor === 1 ? 0.4 : 5.4, item.z);
+        scene.add(mesh);
+        itemMeshes.push({ id: item.id, mesh });
+    });
+
+    let keys = {};
+    window.addEventListener('keydown', e => keys[e.key.toLowerCase()] = true);
+    window.addEventListener('keyup', e => keys[e.key.toLowerCase()] = false);
+
+    // Xoay góc nhìn bằng chuột
+    let cameraRotationY = 0;
+    window.addEventListener('mousemove', e => {
+        if (document.pointerLockElement === document.body) {
+            cameraRotationY -= e.movementX * 0.003;
+        }
+    });
+
+    renderer.domElement.addEventListener('click', () => {
+        renderer.domElement.requestPointerLock();
+    });
+
+    function playHorrorMusic() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        setInterval(() => {
+            if (gameState.escaped) return;
+            try {
+                let osc = audioCtx.createOscillator();
+                let gain = audioCtx.createGain();
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(50, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(20, audioCtx.currentTime + 2.5);
+                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 2.5);
+                osc.connect(gain);
+                gain.connect(audioCtx.destination);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 2.5);
+            } catch(e) {}
+        }, 5000);
+    }
+
+    function startSinglePlayer() {
+        isMultiplayer = false;
+        document.getElementById('lobby-menu').style.display = 'none';
+        playHorrorMusic();
+        renderer.setAnimationLoop(gameLoop);
+    }
+
+    function quitToMenu() {
+        location.reload();
+    }
+
+    function initPeer() {
+        const code = Math.random().toString(36).substring(2, 7).toUpperCase();
+        peer = new Peer('HM-' + code);
+        return code;
+    }
+
+    function hostGame() {
+        isMultiplayer = true;
+        isHost = true;
+        myRole = 'p1';
+        const code = initPeer();
+        document.getElementById('menu-initial').style.display = 'none';
+        document.getElementById('menu-waiting').style.display = 'block';
+        document.getElementById('room-code-display').innerText = code;
+
+        peer.on('connection', c => {
+            conn = c;
+            setupConnection();
+            document.getElementById('lobby-menu').style.display = 'none';
+            playHorrorMusic();
+        });
+    }
+
+    function showJoinInput() {
+        document.getElementById('menu-initial').style.display = 'none';
+        document.getElementById('menu-join').style.display = 'block';
+    }
+
+    function resetMenu() {
+        document.getElementById('menu-join').style.display = 'none';
+        document.getElementById('menu-initial').style.display = 'block';
+    }
+
+    function joinGame() {
+        const code = document.getElementById('join-code-input').value.trim().toUpperCase();
+        if (!code) return;
+        isMultiplayer = true;
+        myRole = 'p2';
+        peer = new Peer();
+        
+        peer.on('open', () => {
+            conn = peer.connect('HM-' + code);
+            setupConnection();
+            playHorrorMusic();
+        });
+    }
+
+    function setupConnection() {
+        conn.on('open', () => {
+            document.getElementById('lobby-menu').style.display = 'none';
+            renderer.setAnimationLoop(gameLoop);
+        });
+
+        conn.on('data', data => {
+            if (isHost) {
+                if (data.type === 'player_update') {
+                    gameState.players.p2 = data.player;
+                    gameState.items = data.items;
+                    gameState.escaped = data.escaped;
+                }
+            } else {
+                if (data.type === 'sync') {
+                    gameState = data.state;
+                }
+            }
+        });
+    }
+
+    function update() {
+        const me = gameState.players[myRole];
+        if (!me || gameState.escaped) return;
+
+        me.rot = cameraRotationY;
+
+        if (keys['q'] && !keys['q_lock']) {
+            wardrobes.forEach(w => {
+                if (w.floor === me.floor && Math.hypot(me.x - w.x, me.z - w.z) < 1.8) {
+                    me.hiding = !me.hiding;
+                    document.getElementById('status-hiding').style.display = me.hiding ? 'block' : 'none';
+                }
+            });
+            keys['q_lock'] = true;
+        }
+        if (!keys['q']) keys['q_lock'] = false;
+
+        if (!me.hiding) {
+            let speed = keys['shift'] ? 0.1 : 0.06;
+            let moveX = 0, moveZ = 0;
+
+            if (keys['w']) { moveX -= Math.sin(me.rot) * speed; moveZ -= Math.cos(me.rot) * speed; }
+            if (keys['s']) { moveX += Math.sin(me.rot) * speed; moveZ += Math.cos(me.rot) * speed; }
+            if (keys['a']) { moveX -= Math.cos(me.rot) * speed; moveZ += Math.sin(me.rot) * speed; }
+            if (keys['d']) { moveX += Math.cos(me.rot) * speed; moveZ -= Math.sin(me.rot) * speed; }
+
+            me.x += moveX;
+            me.z += moveZ;
+
+            me.x = Math.max(-13, Math.min(13, me.x));
+            me.z = Math.max(-13, Math.min(13, me.z));
+
+            if (keys['f'] && !keys['f_lock']) {
+                me.light = !me.light;
+                keys['f_lock'] = true;
+            }
+            if (!keys['f']) keys['f_lock'] = false;
+
+            if (me.x > 8 && me.x < 12 && me.z > -2 && me.z < 2) {
+                if (keys['e'] && !keys['e_lock']) {
+                    me.floor = me.floor === 1 ? 2 : 1;
+                    document.getElementById('floor-display').innerText = me.floor;
+                    keys['e_lock'] = true;
+                }
+            }
+            if (!keys['e']) keys['e_lock'] = false;
+
+            gameState.items.forEach(item => {
+                if (!item.taken && item.floor === me.floor) {
+                    if (Math.hypot(me.x - item.x, me.z - item.z) < 1.8 && keys['e']) {
+                        item.taken = true;
+                    }
+                }
+            });
+
+            let collected = gameState.items.filter(i => i.taken).length;
+            document.getElementById('items-count').innerText = collected + "/4";
+
+            if (collected === 4 && me.floor === 1) {
+                if (Math.hypot(me.x - (-10), me.z - (-10)) < 2.5 && keys['e']) {
+                    gameState.escaped = true;
+                    alert("CHÚC MỪNG! BẠN ĐÃ LÊN XE VÀ TRỐN THOÁT THÀNH CÔNG!");
+                    location.reload();
+                }
+            }
+        }
+
+        if (!isMultiplayer || isHost) {
+            let dx = me.x - gameState.ghostPos.x;
+            let dz = me.z - gameState.ghostPos.z;
+            let dist = Math.hypot(dx, dz);
+
+            if (dist > 0.5) {
+                gameState.ghostPos.x += (dx / dist) * 0.03;
+                gameState.ghostPos.z += (dz / dist) * 0.03;
+            }
+            gameState.ghostPos.floor = me.floor;
+
+            // KHI MA CHẠM TRÚNG NHÂN VẬT -> HỒI SINH NGAY TẠI CHỖ (KHÔNG VĂNG RA SẢNH)
+            if (!me.hiding && dist < 1.3 && me.floor === gameState.ghostPos.floor) {
+                me.x = 0;
+                me.z = 10;
+                me.floor = 1;
+                alert("BẠN ĐÃ BỊ MA BẮT! HỒI SINH LẠI AN TOÀN ĐỂ CHƠI TIẾP!");
+            }
+        }
+
+        if (isMultiplayer && conn && conn.open) {
+            if (isHost) {
+                conn.send({ type: 'sync', state: gameState });
+            } else {
+                conn.send({ type: 'player_update', player: me, items: gameState.items, escaped: gameState.escaped });
+            }
+        }
+    }
+
+    function renderScene() {
+        ghost.position.set(gameState.ghostPos.x, gameState.ghostPos.floor === 1 ? 1.75 : 6.75, gameState.ghostPos.z);
+
+        gameState.items.forEach((item, index) => {
+            itemMeshes[index].mesh.visible = !item.taken && item.floor === gameState.players[myRole].floor;
+        });
+
+        const me = gameState.players[myRole];
+        // Góc nhìn thứ nhất chuẩn xác qua đôi mắt nhân vật
+        camera.position.set(me.x, (me.floor === 1 ? 0 : 5) + 2.2, me.z);
+        
+        let lookX = me.x - Math.sin(me.rot) * 10;
+        let lookZ = me.z - Math.cos(me.rot) * 10;
+        camera.lookAt(lookX, (me.floor === 1 ? 0 : 5) + 2.2, lookZ);
+
+        renderer.render(scene, camera);
+    }
+
+    function gameLoop() {
+        update();
+        renderScene();
+    }
+</script>
+</body>
+</html>
